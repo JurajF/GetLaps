@@ -1,0 +1,18 @@
+services:
+  getlaps:
+    build: .
+    image: getlaps:latest
+    ports:
+      - "8080:8080"
+    environment:
+      AzureAd__TenantId: ${AZUREAD_TENANT_ID}
+      AzureAd__ClientId: ${AZUREAD_CLIENT_ID}
+      AzureAd__ClientSecret: ${AZUREAD_CLIENT_SECRET}
+      # Set to "true" when a TLS-terminating reverse proxy sits in front of the container.
+      ReverseProxy__Enabled: "false"
+    volumes:
+      - getlaps-keys:/keys
+    restart: unless-stopped
+
+volumes:
+  getlaps-keys:
