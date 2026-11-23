@@ -36,7 +36,9 @@ public sealed class LapsService
 
         var baseUrl = options.Value.BaseUrl;
         _http.BaseAddress = new Uri(baseUrl.EndsWith('/') ? baseUrl : baseUrl + "/");
-        // Graph requires these two headers on every deviceLocalCredentials request.
+        // Graph rejects deviceLocalCredentials requests (400) without a User-Agent,
+        // and requires the ocp-client-name/version headers as well.
+        _http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("GetLaps", "1.0"));
         _http.DefaultRequestHeaders.Add("ocp-client-name", "GetLaps");
         _http.DefaultRequestHeaders.Add("ocp-client-version", "1.0");
     }
