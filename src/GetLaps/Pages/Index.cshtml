@@ -1,0 +1,107 @@
+@page
+@model IndexModel
+@{
+    ViewData["Title"] = "LAPS lookup";
+    static string When(DateTimeOffset? d) => d?.ToUniversalTime().ToString("yyyy-MM-dd HH:mm 'UTC'") ?? "unknown";
+}
+
+<section class="card">
+    <h1>Look up a LAPS password</h1>
+    <p class="muted">Enter the PC name as it appears in Microsoft Entra ID.</p>
+
+    <form method="post" asp-page-handler="Lookup" class="lookup" autocomplete="off">
+        <label asp-for="ComputerName"></label>
+        <div class="row">
+            <input asp-for="ComputerName" placeholder="e.g. PC-001234" autofocus spellcheck="false" />
+            <button type="submit">Get password</button>
+        </div>
+        <span asp-validation-for="ComputerName" class="field-error"></span>
+    </form>
+</section>
+
+@if (Model.ErrorMessage is not null)
+{
+    <section class="card alert" role="alert">@Model.ErrorMessage</section>
+}
+
+@if (Model.Matches is { Count: > 1 })
+{
+    <section class="card">
+        <h2>Several devices are named "@Model.ComputerName"</h2>
+        <p class="muted">Pick the one you need. The most recent backup is listed first.</p>
+        <table>
+            <thead><tr><th>Device ID</th><th>Last backup</th><th></th></tr></thead>
+            <tbody>
+            @foreach (var d in Model.Matches)
+            {
+                <tr>
+                    <td><code>@d.Id</code></td>
+                    <td>@When(d.LastBackupDateTime)</td>
+                    <td>
+                        <form method="post" asp-page-handler="Device">
+                            <input type="hidden" name="deviceId" value="@d.Id" />
+                            <button type="submit" class="secondary">Show</button>
+                        </form>
+                    </td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    </section>
+}
+
+@if (Model.Result?.Current is { } current)
+{
+    var device = Model.Result.Device;
+    <section class="card result">
+        <h2>@device.DeviceName</h2>
+        <dl>
+            <dt>Local admin account</dt>
+            <dd>
+                <code id="account">@current.AccountName</code>
+                <button type="button" class="link" data-copy="account">Copy</button>
+            </dd>
+
+            <dt>Password</dt>
+            <dd>
+                <code id="password" class="secret masked" data-secret="@current.Password">••••••••••••</code>
+                <button type="button" class="link" data-reveal="password">Show</button>
+                <button type="button" class="link" data-copy="password">Copy</button>
+            </dd>
+
+            <dt>Backed up</dt>
+            <dd>@When(current.BackupDateTime)</dd>
+
+            <dt>Next rotation check</dt>
+            <dd>@When(device.RefreshDateTime)</dd>
+
+            <dt>Device ID</dt>
+            <dd><code>@device.Id</code></dd>
+        </dl>
+
+        @if (Model.Result.Credentials.Count > 1)
+        {
+            <details>
+                <summary>Previous passwords (@(Model.Result.Credentials.Count - 1))</summary>
+                <table>
+                    <thead><tr><th>Account</th><th>Backed up</th><th>Password</th></tr></thead>
+                    <tbody>
+                    @for (var i = 1; i < Model.Result.Credentials.Count; i++)
+                    {
+                        var c = Model.Result.Credentials[i];
+                        <tr>
+                            <td>@c.AccountName</td>
+                            <td>@When(c.BackupDateTime)</td>
+                            <td>
+                                <code id="pw-@i" class="secret masked" data-secret="@c.Password">••••••••</code>
+                                <button type="button" class="link" data-reveal="pw-@i">Show</button>
+                                <button type="button" class="link" data-copy="pw-@i">Copy</button>
+                            </td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
+            </details>
+        }
+    </section>
+}

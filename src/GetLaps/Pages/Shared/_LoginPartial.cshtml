@@ -1,0 +1,11 @@
+<nav class="account">
+@if (User.Identity?.IsAuthenticated == true)
+{
+    <span class="who">@(User.FindFirst("name")?.Value ?? User.Identity?.Name)</span>
+    <a asp-area="MicrosoftIdentity" asp-controller="Account" asp-action="SignOut">Sign out</a>
+}
+else
+{
+    <a asp-area="MicrosoftIdentity" asp-controller="Account" asp-action="SignIn">Sign in</a>
+}
+</nav>
