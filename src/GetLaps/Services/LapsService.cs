@@ -18,9 +18,31 @@ public sealed class LapsService
     public const string Scope = "https://graph.microsoft.com/DeviceLocalCredential.Read.All";
     public static readonly string[] Scopes = [Scope];
 
+    /// <summary>
+    /// Extra delegated scopes needed only for "request rotation". They are requested
+    /// incrementally the first time someone rotates, so lookups keep working even if
+    /// they have not been consented yet.
+    /// </summary>
+    public static readonly string[] RotationScopes =
+    [
+        "https://graph.microsoft.com/DeviceManagementManagedDevices.Read.All",
+        "https://graph.microsoft.com/DeviceManagementManagedDevices.PrivilegedOperations.All",
+    ];
+
+    private const string ReadForbidden =
+        "Access denied. Your account needs an Entra role that can read LAPS passwords " +
+        "(for example Cloud Device Administrator or Intune Administrator), and the app " +
+        "needs admin consent for DeviceLocalCredential.Read.All.";
+
+    private const string RotateForbidden =
+        "Access denied. Your account needs an Intune role that allows \"Rotate local admin password\" " +
+        "(for example Intune Administrator), and the app needs admin consent for " +
+        "DeviceManagementManagedDevices.Read.All and DeviceManagementManagedDevices.PrivilegedOperations.All.";
+
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
     private readonly HttpClient _http;
+    private readonly Uri _betaBase;
     private readonly IAuthorizationHeaderProvider _authHeaders;
     private readonly ILogger<LapsService> _logger;
 
@@ -36,6 +58,8 @@ public sealed class LapsService
 
         var baseUrl = options.Value.BaseUrl;
         _http.BaseAddress = new Uri(baseUrl.EndsWith('/') ? baseUrl : baseUrl + "/");
+        var betaUrl = options.Value.BetaBaseUrl;
+        _betaBase = new Uri(betaUrl.EndsWith('/') ? betaUrl : betaUrl + "/");
         // Graph rejects deviceLocalCredentials requests (400) without a User-Agent,
         // and requires the ocp-client-name/version headers as well.
         _http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("GetLaps", "1.0"));
@@ -49,7 +73,7 @@ public sealed class LapsService
         var filter = $"deviceName eq '{deviceName.Replace("'", "''")}'";
         var url = "directory/deviceLocalCredentials?$filter=" + Uri.EscapeDataString(filter);
 
-        var page = await SendAsync<GraphCollection<DeviceLocalCredentialInfo>>(url, ct);
+        var page = await SendAsync<GraphCollection<DeviceLocalCredentialInfo>>(HttpMethod.Get, url, Scopes, ReadForbidden, ct);
         return (page?.Value ?? [])
             .Select(ToDevice)
             .OrderByDescending(d => d.LastBackupDateTime)
@@ -62,7 +86,7 @@ public sealed class LapsService
         var url = $"directory/deviceLocalCredentials/{Uri.EscapeDataString(deviceId)}" +
                   "?$select=id,deviceName,lastBackupDateTime,refreshDateTime,credentials";
 
-        var info = await SendAsync<DeviceLocalCredentialInfo>(url, ct)
+        var info = await SendAsync<DeviceLocalCredentialInfo>(HttpMethod.Get, url, Scopes, ReadForbidden, ct)
                    ?? throw new LapsException("No LAPS credentials were returned for this device.");
 
         var credentials = (info.Credentials ?? [])
@@ -77,32 +101,70 @@ public sealed class LapsService
         return new LapsDeviceCredentials(ToDevice(info), credentials);
     }
 
-    private async Task<T?> SendAsync<T>(string relativeUrl, CancellationToken ct)
+    /// <summary>
+    /// Asks Intune to rotate the local admin password of the device with this Entra device ID
+    /// (the same ID LAPS uses). Intune delivers the request at the device's next check-in;
+    /// the device then sets a new password and backs it up to Entra ID.
+    /// </summary>
+    /// <returns>The Intune device name the request was sent to.</returns>
+    public async Task<string> RequestRotationAsync(string entraDeviceId, CancellationToken ct)
+    {
+        var filter = $"azureADDeviceId eq '{entraDeviceId.Replace("'", "''")}'";
+        var findUrl = "deviceManagement/managedDevices?$select=id,deviceName,lastSyncDateTime&$filter=" +
+                      Uri.EscapeDataString(filter);
+
+        var page = await SendAsync<GraphCollection<ManagedDeviceInfo>>(
+            HttpMethod.Get, findUrl, RotationScopes, RotateForbidden, ct);
+
+        var managed = (page?.Value ?? [])
+            .Where(d => !string.IsNullOrEmpty(d.Id))
+            .OrderByDescending(d => d.LastSyncDateTime)
+            .FirstOrDefault()
+            ?? throw new LapsException(
+                "This device is not managed by Intune, so a rotation can't be requested from here. " +
+                "Run Reset-LapsPassword on the device instead.");
+
+        // rotateLocalAdminPassword is only available on the Graph beta endpoint.
+        var rotateUrl = new Uri(_betaBase,
+            $"deviceManagement/managedDevices/{Uri.EscapeDataString(managed.Id!)}/rotateLocalAdminPassword");
+
+        await SendAsync<object>(HttpMethod.Post, rotateUrl.ToString(), RotationScopes, RotateForbidden, ct);
+        return managed.DeviceName ?? entraDeviceId;
+    }
+
+    private async Task<T?> SendAsync<T>(
+        HttpMethod method, string url, string[] scopes, string forbiddenMessage, CancellationToken ct)
     {
         // Throws MicrosoftIdentityWebChallengeUserException when consent or a fresh
-        // sign-in is needed; [AuthorizeForScopes] on the page turns that into a redirect.
-        var authorization = await _authHeaders.CreateAuthorizationHeaderForUserAsync(Scopes, cancellationToken: ct);
+        // sign-in is needed; the page turns that into an Entra redirect.
+        var authorization = await _authHeaders.CreateAuthorizationHeaderForUserAsync(scopes, cancellationToken: ct);
 
-        using var request = new HttpRequestMessage(HttpMethod.Get, relativeUrl);
+        using var request = new HttpRequestMessage(method, url);
         request.Headers.Authorization = AuthenticationHeaderValue.Parse(authorization);
+        if (method == HttpMethod.Post)
+        {
+            request.Content = new StringContent(string.Empty, Encoding.UTF8, "application/json");
+        }
 
         using var response = await _http.SendAsync(request, ct);
         if (response.IsSuccessStatusCode)
         {
+            if (response.StatusCode == HttpStatusCode.NoContent || response.Content.Headers.ContentLength == 0)
+            {
+                return default;
+            }
             return await response.Content.ReadFromJsonAsync<T>(Json, ct);
         }
 
         var error = await ReadGraphErrorAsync(response, ct);
         _logger.LogWarning("Graph request {Url} failed with {Status}: {Error}",
-            relativeUrl.Split('?')[0], (int)response.StatusCode, error);
+            url.Split('?')[0], (int)response.StatusCode, error);
 
         throw response.StatusCode switch
         {
-            HttpStatusCode.NotFound => new LapsException("No LAPS password is stored in Entra ID for this device."),
-            HttpStatusCode.Forbidden => new LapsException(
-                "Access denied. Your account needs an Entra role that can read LAPS passwords " +
-                "(for example Cloud Device Administrator or Intune Administrator), and the app " +
-                "needs admin consent for DeviceLocalCredential.Read.All."),
+            HttpStatusCode.NotFound when ReferenceEquals(scopes, Scopes) =>
+                new LapsException("No LAPS password is stored in Entra ID for this device."),
+            HttpStatusCode.Forbidden => new LapsException(forbiddenMessage),
             HttpStatusCode.Unauthorized => new LapsException("Microsoft Graph rejected the access token. Please sign out and sign in again."),
             _ => new LapsException($"Microsoft Graph returned an error ({(int)response.StatusCode}): {error}"),
         };
@@ -151,6 +213,8 @@ public sealed class LapsService
         string? AccountSid,
         DateTimeOffset? BackupDateTime,
         string? PasswordBase64);
+
+    private sealed record ManagedDeviceInfo(string? Id, string? DeviceName, DateTimeOffset? LastSyncDateTime);
 
     private sealed record GraphErrorResponse(GraphError? Error);
 

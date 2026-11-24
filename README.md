@@ -16,8 +16,16 @@ account can't read LAPS passwords in Entra, neither can the app on your behalf.
    and decodes the base64 password. The newest password is shown first, masked, with
    show and copy buttons; older backed-up passwords are listed below it.
 4. If several devices share the name, you pick one by device ID.
+5. Optional: **Request password rotation** asks Intune to rotate the device's local admin
+   password. The app finds the Intune device with
+   `GET /deviceManagement/managedDevices?$filter=azureADDeviceId eq '<deviceId>'` and calls
+   `POST /beta/deviceManagement/managedDevices/{id}/rotateLocalAdminPassword` (beta only).
+   Intune delivers it at the device's next check-in, and the new password shows up here once
+   the device backs it up. Only Intune-managed devices can be rotated this way. The extra
+   permissions are requested the first time someone clicks the button.
 
-Every retrieval is logged as `LAPS credentials for device {name} ({id}) retrieved by {user}`.
+Every retrieval is logged as `LAPS credentials for device {name} ({id}) retrieved by {user}`,
+and every rotation request as `LAPS password rotation for device {name} ({id}) requested by {user}`.
 Passwords are never logged, and the result page is sent with `Cache-Control: no-store`.
 
 ## Prerequisites in your tenant
@@ -52,6 +60,10 @@ Passwords are never logged, and the result page is sent with `Cache-Control: no-
    - `User.Read` (added by default)
    - Click **Grant admin consent for <tenant>**. `DeviceLocalCredential.Read.All` requires
      admin consent; users cannot consent to it themselves.
+   - For the rotation button, also add `DeviceManagementManagedDevices.Read.All` and
+     `DeviceManagementManagedDevices.PrivilegedOperations.All`, then grant admin consent
+     again. Users who rotate also need an Intune role with the *Rotate local admin password*
+     permission (for example Intune Administrator).
 5. Recommended: limit who can sign in. Go to **Enterprise applications > GetLaps >
    Properties**, set **Assignment required** to **Yes**, then under **Users and groups**
    assign your helpdesk group.
