@@ -5,6 +5,14 @@
         return el.dataset.secret !== undefined ? el.dataset.secret : el.textContent;
     }
 
+    // Forms with data-confirm ask before submitting (used for "Request password rotation").
+    document.addEventListener("submit", function (e) {
+        const form = e.target.closest("form[data-confirm]");
+        if (form && !window.confirm(form.dataset.confirm)) {
+            e.preventDefault();
+        }
+    });
+
     document.addEventListener("click", async function (e) {
         const reveal = e.target.closest("[data-reveal]");
         if (reveal) {

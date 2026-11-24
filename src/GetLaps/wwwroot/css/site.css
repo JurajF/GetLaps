@@ -128,3 +128,7 @@ summary { cursor: pointer; color: var(--accent); }
     dl { grid-template-columns: 1fr; }
     dt { margin-top: 8px; }
 }
+
+.notice { background: var(--code-bg); border-color: transparent; }
+.rotate { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+.rotate .muted { margin: 0; font-size: .9rem; }

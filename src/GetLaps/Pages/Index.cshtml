@@ -24,6 +24,11 @@
     <section class="card alert" role="alert">@Model.ErrorMessage</section>
 }
 
+@if (Model.Notice is not null)
+{
+    <section class="card notice" role="status">@Model.Notice</section>
+}
+
 @if (Model.Matches is { Count: > 1 })
 {
     <section class="card">
@@ -78,6 +83,13 @@
             <dt>Device ID</dt>
             <dd><code>@device.Id</code></dd>
         </dl>
+
+        <form method="post" asp-page-handler="Rotate" class="rotate"
+              data-confirm="Request a new local admin password for @device.DeviceName? The current password stops working once the device rotates it.">
+            <input type="hidden" name="deviceId" value="@device.Id" />
+            <button type="submit" class="secondary">Request password rotation</button>
+            <span class="muted">Sent through Intune. The device applies it at its next check-in.</span>
+        </form>
 
         @if (Model.Result.Credentials.Count > 1)
         {
